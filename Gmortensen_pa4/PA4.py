@@ -1,0 +1,1058 @@
+#!/usr/bin/env python3
+import os
+import shutil
+import random
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Gabriel Mortensen
+#3/29/2022
+#CS 457
+#
+#Project 2: Basic Data Manipulation 
+#
+#This assignment was created to task students to 
+#create a basic database system that can modify tables such that   
+#depending on certain requirements tuples can be: 
+#deleted, modified, outputted to the User 
+#
+#Various functions have been used to complete this task
+#with the idea that directories are databases and files are tables. 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Define Global Variables
+home_directory = os.getcwd() # Used to remember the "home" directory
+Transaction_State = False #False if transaction is done or completed   
+File_In_Transaction = ''
+Personal_ID = 0
+
+#Custom Exceptions 
+class ElementNotFoundError (Exception): #this makes a new exception avaliable 
+    pass
+class WrongSingleQuotes (Exception): #this makes a new exception avaliable 
+    pass    
+class IncorrectFormat (Exception): #this makes a new exception avaliable 
+    pass
+class Tables_Not_Used (Exception): #this makes a new exception avaliable 
+    pass
+class Locked_File (Exception): #this makes a new exception avaliable 
+    pass
+class Commit_Issue (Exception): #this makes a new exception avaliable 
+    pass
+class Update_Violation (Exception): #this makes a new exception avaliable 
+    pass
+class No_File_Transaction (Exception): #this makes a new exception avaliable 
+    pass
+class Abort (Exception): #this makes a new exception avaliable 
+    pass
+#~~~~~~~~~~~~~~~~~~~
+# This function is checuks to see if
+# the user command matches proper JOIN requirements 
+# if so, the proper select, table, and equation elements are obtained 
+#~~~~~~~~~~~~~~~~~~
+def JOIN_parser(command):
+
+    try:
+        #index of from in user command 
+        from_index = command.index('from') 
+      
+        #default to no outer left join 
+        OUTER_CHECK = False 
+        
+        #replace on to where 
+        if('on' in command):
+            on_index = command.index('on') #index of from in user command 
+            command[on_index] = 'where' #change 'on' to 'where'
+
+        #index of where in user command 
+        where_index = command.index('where') 
+        
+        #remove comma if one exists 
+        command[from_index+2].replace(',', '') 
+
+        #use element found in loop to find the right table index in the command (element_index - 1)
+        second_table_index = where_index-2
+        first_table_element_index = from_index+2  
+
+        #determine if command is outer join or inner join 
+        Join_Test = ListToString(command[first_table_element_index + 1 : second_table_index] ).replace(" ", "")
+        OUTER_CHECK = OUTER_JOIN_CHECK(Join_Test)
+
+        #update command to exclude key words of inner or outer join 
+        new_command = ListToString(command[0 : first_table_element_index+1]) + ' ' + ListToString(command[second_table_index :])
+        command = new_command.split()
+        
+        #reevaluate indexes 
+        where_index = command.index('where') #index of where in user command 
+        from_index = command.index('from') #index of from in user command
+
+        #obtain left table information 
+        left_table = command[from_index+1]
+        if not os.path.exists(left_table):
+            table = left_table
+            raise FileNotFoundError   
+        left_element = command[from_index+2].replace(',', '')
+        
+        #obtain right table information 
+        right_table = command[from_index+3] 
+        if not os.path.exists(right_table):
+            table = left_table
+            raise FileNotFoundError  
+        right_element = command[from_index+4]
+
+        #obtain equation information from where clause 
+        L_EQ_And_Element = command[where_index + 1] 
+        R_EQ_And_Element = command[where_index + 3] 
+        first_element = L_EQ_And_Element.split('.')[0]
+        next_element = R_EQ_And_Element.split('.')[0]
+
+        headerL = OBTAIN_HEADER(left_table) #obtain header of left file 
+        headerR = OBTAIN_HEADER(right_table) #obtain header of right file       
+
+        #Grab the equation and turn to list 
+        equation = L_EQ_And_Element.split('.')[1] +  " " + command[where_index+2] +   " " +  R_EQ_And_Element.split('.')[1]      
+        equation = equation.split()   
+    
+        #check if elements actually are in their tables 
+        JOIN_element_check(left_table, right_table, left_element, right_element, first_element, next_element, OUTER_CHECK, equation)
+       
+    except FileNotFoundError:   #Error message for file not existing 
+        print("!Failed to alter table {0} because it does not exist.".format(table))
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#   Check if the desired elements in obtained in JOIN_parser actually match the approriate table
+#   and obtain indexes of the equation for final for loop 
+#   if elements do exist in respective tables 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def JOIN_element_check (left_table, right_table, left_element, right_element, first_element, next_element, OUTER_CHECK, equation):
+    
+    
+    try:
+        
+        headerL = OBTAIN_HEADER(left_table) #obtain header of left file 
+        headerR = OBTAIN_HEADER(right_table) #obtain header of right file 
+      
+       
+        #boolean represents that the left table aligns with the left elements (set as default)
+        Flipped = False; 
+        wrong_element = ''     
+        #IF first element referes to left table and next element refers to right table 
+        if( (first_element == left_element) and (next_element == right_element) ):
+
+            #determine if the first element is indeed inside the left table 
+            if(ElementCheckExact(left_table, equation[0]) ):  
+                L_EQ_TableIndex = FindIndex(left_table, equation[0]) * 2 #get index of element in table (for tuples it is *2)
+            else:
+                wrong_element = str(equation[0])
+                table = left_table
+                raise ElementNotFoundError #if the element does not exist raise a custom exception
+      
+            #determine if the next element is indeed inside the right table 
+            if(ElementCheckExact(right_table, equation[2]) ):  
+                R_EQ_TableIndex = FindIndex(right_table, equation[2]) * 2 #get index of element in table (for tuples it is *2)
+            else:
+                wrong_element = str(equation[2])
+                table = right_table
+                raise ElementNotFoundError #if the element does not exist raise a custom exception
+
+        #IF first element referes to right table and next element refers to left table 
+        elif ( (first_element == right_element) and (next_element == left_element) ): 
+            #determine if the first element is indeed inside the right table 
+            print(equation[0])
+            print(headerR)
+            if( ElementCheckExact(right_table, equation[0]) ):  
+                L_EQ_TableIndex = FindIndex(right_table, equation[0]) * 2 #get index of element in table (for tuples it is *2)
+            else:
+                wrong_element = str(equation[0])
+                table = right_table
+                raise ElementNotFoundError #if the element does not exist raise a custom exception
+      
+            #determine if the next element is indeed inside the right table 
+            if(ElementCheckExact(left_table, equation[2])):  
+                R_EQ_TableIndex = FindIndex(left_table, equation[2]) * 2 #get index of element in table (for tuples it is *2)
+            else:
+                wrong_element = str(equation[2])
+                table = left_table
+                raise ElementNotFoundError #if the element does not exist raise a custom exception
+            #the left table aligns with the right element 
+            Flipped = True; 
+        else: 
+            raise Tables_Not_Used
+
+        #if everything passess inspection then continue with JOIN operator 
+        JOIN (left_table, right_table, L_EQ_TableIndex, R_EQ_TableIndex, Flipped, OUTER_CHECK, equation)
+       
+    except ElementNotFoundError:
+        print("!Failed to query because {0} does not exist in table {1}.".format(wrong_element ,table))
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Use the left and right table information to perform a proper join    
+# A check is done to see if left outer join is requested,
+# otherwise program checks the required elements and runs through checks 
+# using previous functions 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def JOIN (left_table, right_table, L_EQ_TableIndex, R_EQ_TableIndex, Flipped,  OUTER_CHECK, equation):  
+
+    headerL = OBTAIN_HEADER(left_table) #obtain header of left file 
+    headerR = OBTAIN_HEADER(right_table) #obtain header of right file 
+    linesL = OBTAIN_TUPLES(left_table)  #obtain lines of left file 
+    linesR = OBTAIN_TUPLES(right_table) #obtain lines of right file
+
+    ComboHeader = headerL + ' | ' + headerR  #combine headers of the two files 
+    ComboHeader = ComboHeader.split() #turn the result into a list to remove uncessary space 
+    ComboHeader = ListToString(ComboHeader)  #turn list back into string to maintain proper format 
+    print(ComboHeader) #print the header to the terminal since only select * is used for JOINS 
+
+
+    for tuplesL in linesL: #run through every tuple in the left file 
+        tuple_l_check = False #check if the tuple has any matching element in the right tuples 
+        
+        for tuplesR in linesR:  #replicate cartisian map by checking every left tuple with every right tuple 
+            #make sure the elements are on the proper side of the equation 
+            if(Flipped != True):
+                equation[0] =  tuplesL[L_EQ_TableIndex]
+                equation[2] =  tuplesR[R_EQ_TableIndex]
+            else:
+                equation[2] =  tuplesL[L_EQ_TableIndex]
+                equation[0] =  tuplesR[R_EQ_TableIndex]
+            if (ListToEquation(equation)): #check equation
+                 print(tuplesL.rstrip(), end = ' | ' )
+                 print(tuplesR.rstrip())
+                 tuple_l_check = True #Set a check so that program knows there is at least one match in left tuple with all of right tuplel 
+
+        #after right tuple check if left tuple has no match and outer activated then output only left 
+        if (OUTER_CHECK == True and tuple_l_check == False): 
+             print(tuplesL.rstrip(), end = ' | ') #print all of left tuple 
+             for chars in tuplesR: #rest is blank except for remaining divisors in right tuple 
+                if (chars == '|'): #if char is a tuple 
+                    print(' | ', end = '')  #print the divisor 
+             print()
+              
+#~~~~~~~~~~~~~~~~~~
+# This function reads part of the user command and determins if they desire a left outer join or not 
+#~~~~~~~~~~~~~~~~~~
+def OUTER_JOIN_CHECK(Combined_String): 
+    if ('leftouterjoin' in Combined_String):
+        return True  
+    else:
+        return False
+
+#~~~~~~~~~~~~~
+# Uses the equation provided in parameters to determine if equation is true or false
+# returns a true or false depending on legitmacy of equation
+#~~~~~~~~~~~~~
+def ListToEquation(equation): 
+   
+    #Add double == if = sign detected 
+    if (equation[1] == '='):
+        equation[1] = equation[1] + equation[1]
+    
+    #Do different operations depending on datatypes 
+    if(equation[2].isnumeric()): #numerical datatypes
+        if (eval(ListToString(equation))): #default eval function that tests numerical scenarios 
+            return True
+        else:
+            return False
+    else:    #string datatypes 
+        equation = ListToString(equation).replace("'", "")        #Remove all single quotes 
+        equation = equation.split() #remove whitespace 
+        if (equation[1] == '=='): #if both are equal test 
+            if (str(equation[0]) == str(equation[2])):
+                return True
+            else:
+                return False
+        if (equation[1] == '!='): #if strings are different
+            if (str(equation[0]) != str(equation[2])):
+                return True
+            else:
+                return False
+        elif (equation[1] == '>'): #if one string is "greater" than other test 
+            if (str(equation[0]) > str(equation[2])):
+                return True
+            else:
+                return False
+        else: #if one string is "less" than another test
+            if (str(equation[0]) < str(equation[2])):
+                return True
+            else:
+                return False
+
+#~~~~~~~~~~~~~
+# Similar to FindIndex but for Lock files 
+#~~~~~~~~~~~~~
+def FindIndexLock(table, header, element):
+    
+    sub_list = header.split() #Break header of table up into segments 
+    
+    index = sub_list.index(element) #Obtain index of equation datatype in header
+    return int(index/3) #Divide value by 3 due to extra '|' and datatype
+
+#~~~~~~~~~~~~~
+# Find the index of the identifer listed in the header 
+# and modify it to work with contents of table 
+#~~~~~~~~~~~~~
+def FindIndex(table, element):
+    header = OBTAIN_HEADER(table) #obtain header of table 
+    
+    sub_list = header.split() #Break header of table up into segments 
+    
+    index = sub_list.index(element) #Obtain index of equation datatype in header
+    return int(index/3) #Divide value by 3 due to extra '|' and datatype
+
+#~~~~~~~~~~~~~~~~~~~~~~~~`
+# This function removes extra white space from the table to ensure it is in proper format 
+#~~~~~~~~~~~~~~~~~~~~~~~
+def CLEAN_FILE(table):
+    file = open(table, "r")  
+    data = file.read().rstrip('\n') #Remove white space created 
+    file.close()
+ 
+    file = open(table, "w") 
+    file.write(data) #put information back in file without whitespace 
+    file.close()
+
+#~~~~~~~~~~~~~~~~~~~~~~
+# This function obtains the tuples of the table 
+#~~~~~~~~~~~~~~~~~~~~~~
+def OBTAIN_TUPLES(table):
+    file = open(table, "r") #read file 
+    header = file.readline() #read header to skip header of table 
+    lines = file.readlines() #obtain rest of the tuples 
+    file.close() #close the file 
+    return lines #return tuples 
+   
+#~~~~~~~~~~~~~~~~~~~~~~
+# This function obtains the header of the table 
+#~~~~~~~~~~~~~~~~~~~~~~
+def OBTAIN_HEADER(table):
+    file = open(table, "r") #read file 
+    header = file.readline() #obtain headerof table 
+    file.close() #close the file 
+    return header #return tuples 
+
+#~~~~~~~~~~~~
+# This function delets tuples in the table 
+# that match specific requirements specified by the user   
+#~~~~~~~~~~~~
+def DELETE_TUPLE(table, equation):
+
+    try:  #If the file does not exist raise an error, otherwise open the file and append the new element      
+        if not os.path.exists(table):
+            raise FileNotFoundError
+
+        #Declare Variables     
+        delete_counter = 0 #counter used for final result 
+        ElementCheck (table, equation[0]) #check if element exists, if does not exist an exception is raised 
+        where_datatype_index = FindIndex(table, equation[0])  #obtain index of where type in table 
+        header = OBTAIN_HEADER(table) #obtain header of table 
+        lines = OBTAIN_TUPLES(table) #obtain tuples of table 
+        
+       
+
+        file = open(table, "w")  #clear the entire table 
+        file.write(header) #write the saved header in the file's first line 
+
+        for tuples in lines: #run a for loop for all other tuples 
+            if (WHERE_TEST (where_datatype_index, tuples, ListToString(equation[1:]))): #check equation
+                delete_counter = delete_counter + 1 #do not write in tuple if true and increment counter
+            else:
+                file.write(tuples) #if equation false write tuple and continued 
+                delete_counter = delete_counter #counter remains the same if equation false 
+        file.close()
+
+        CLEAN_FILE(table) #remove unecessary white space with function 
+
+        if (delete_counter == 1):  #notify user of how many items have been deleted
+            print('{0} record deleted.'.format(delete_counter))
+        else:
+            print('{0} records deleted.'.format(delete_counter))
+
+    except FileNotFoundError:   #Error message for file not existing 
+        print("!Failed to alter table {0} because it does not exist.".format(table))
+    except ElementNotFoundError:
+        print("!Failed to query because {0} does not exist in table {1}.".format(equation[0] ,table))
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function changes the state of the global variable 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def Transaction_Start():
+    global Transaction_State     
+    Transaction_State = True 
+    print('Transaction starts.')  
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function changes the state of the global variable 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def Commit():
+    try:
+        global Transaction_State
+        global File_In_Transaction
+
+        lock_file_name = "lock_"+File_In_Transaction
+        
+        if (Transaction_State == True):
+
+            if ( ID_check(lock_file_name) == False ): 
+                raise Abort
+
+            if os.path.exists(lock_file_name):
+                lock = open(lock_file_name,"r") #read from lock file 
+                original = open(File_In_Transaction,"w") #clear actual file 
+
+                ID_Lock = lock.readline() #read ID to skip header of table 
+                header = lock.readline() #read header to skip header of table 
+                lines = lock.readlines() #obtain rest of the tuples 
+
+                original.write(header) #write the data to the original file 
+                
+                for tuples in lines: #run a for loop for all other tuples 
+                    original.write(tuples) #write the data to the original file 
+                                
+                lock.close() #close lock 
+                original.close()  #close original file 
+
+                os.remove('{0}/{1}'.format(os.getcwd(), lock_file_name)) #delete the lock file              
+            else:
+                raise No_File_Transaction
+
+            Transaction_State = False 
+            print('Transaction committed.')   
+        
+        else:
+            raise Commit_Issue
+
+    except No_File_Transaction:
+        print("!Failed, no file was used in transaction. Please use a file in transaction.")
+    except Abort:
+        print("Transaction abort.")
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function checks the ID of the lock file 
+# that ID should correlate to the global variable  
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def ID_check(lock_table):
+
+    #open lock file and read ID     
+    file = open(lock_table,"r")
+    ID = file.readline()
+    file.close()
+
+    #check to see if same terminal is being used
+    #by reading the inital ID 
+    if (float(ID) == float(Personal_ID)):
+        return True
+    else:
+        return False
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function performs necessary checks for transactions: 
+# 1. Checking both the existance of the table and lock table 
+# 2. If lock file exists check ID, otherwise make the lock table 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def Transaction_Check_And_Lock(table):
+    
+    try:
+        #if the user has not started the transaction then deny access 
+        if(Transaction_State == False):
+            raise Update_Violation
+        
+        #raise error if file does not exist
+        if not os.path.exists(table):
+            raise FileNotFoundError
+
+        #Default name for lock files (lock_x, with x being a table)    
+        lock_file_name = "lock_"+table
+
+        global File_In_Transaction
+        File_In_Transaction = table #Update global variable to remember what file in transaction 
+
+
+        #if the lock file exists check if ID matches 
+        if os.path.exists(lock_file_name):
+            if (ID_check(lock_file_name) == False):
+                raise Locked_File
+
+        #if lock file does not yet exist then create lock file     
+        else:
+            original = open(table,"r")      #read from the provided file 
+            copy = open(lock_file_name,"w") #write the copy file 
+
+            global Personal_ID
+            copy.write(str(Personal_ID) + '\n') #stamp lock file with personal ID
+
+            data = original.read()  #Read all the data from the original file 
+            copy.write(str(data))   #Copy the information onto the lock file 
+            
+            original.close() #close original file 
+            copy.close() #close copied file 
+
+            return lock_file_name #return locked file name 
+
+    except FileNotFoundError:   #Error message for file not existing 
+        print("!Failed to alter table {0} because it does not exist.".format(table))
+    except Update_Violation:
+        print("Error: Cannot update table without initiating transaction.")
+    
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function replaces certain elements of tuples
+# elements in tuples are replaced if they meet if_EQ requirements 
+# element identifer and assignment determined by then_EQ
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def UPDATE_TABLE(table, then_EQ, if_EQ):
+
+    try:  
+        #run through transaction checks 
+        #if everything working properly then rename file 
+        current_table = table
+        table = Transaction_Check_And_Lock(table)
+             
+        #Declare variables 
+        modified_counter = 0 #counter for number of tuples updated 
+        temp_list = ' ' #create empty string 
+        temp_list = temp_list.split() #turn empty string to list 
+     
+        #Because lock file is special Obtain Tuple and Obtain Header will not work
+        file = open(table, "r") #read file 
+        ID_Lock = file.readline() #read ID to skip header of table 
+        header = file.readline() #read header to skip header of table 
+        lines = file.readlines() #obtain rest of the tuples 
+        file.close() #close the file 
+            
+        element = if_EQ[0] #assign element 
+        if (ElementCheckExactLock (table, header, element) == False): #check if element exists, if does not exist an exception is raised 
+            wrong_element = element
+            table = current_table
+            raise ElementNotFoundError #if the element does not exist raise a custom exception
+
+        element = then_EQ[0] #assign element 
+        ElementCheckExactLock (table, header, element) #check if element exists, if does not exist an exception is raised 
+        if (ElementCheckExactLock (table, header, element) == False): #check if element exists, if does not exist an exception is raised 
+            wrong_element = element
+            table = current_table
+            raise ElementNotFoundError #if the element does not exist raise a custom exception
+    
+
+        where_datatype_index = FindIndexLock(table, header, if_EQ[0])  #obtain index of where type in table 
+        set_index = FindIndexLock(table, header, then_EQ[0]) #obtain index of set type in table
+      
+        file = open(table, "w")  #clear the entire table 
+        file.write(ID_Lock) #write the saved ID in the file's first line 
+        file.write(header) #write the saved header in the file's first line 
+
+        for tuples in lines: #run a for loop for all other tuples 
+            tuples = tuples.split() #turn tuple to list object for indexing 
+            if (WHERE_TEST (where_datatype_index, ListToString(tuples), ListToString(if_EQ[1:]))): #check equation
+                modified_counter = modified_counter + 1 #increment number modified 
+                tuples[set_index * 2] = then_EQ[2] #change set variable to user input
+            file.write(ListToString(tuples)) #write either modfied or unmodfied tuple
+            file.write('\n') 
+
+        file.close()
+
+        CLEAN_FILE(table) #remove unecessary white space with function 
+
+        if (modified_counter == 1):  #notify user of how many items have been modified
+            print('{0} record modified.'.format(modified_counter))
+        else:
+            print('{0} records modified.'.format(modified_counter))
+
+    except FileNotFoundError:   #Error message for file not existing 
+        print("!Failed to alter table {0} because it does not exist.".format(table))
+    except ElementNotFoundError:
+        print("!Failed to query because {0} does not exist in table {1}.".format(element, table))
+    except Locked_File:
+        print("Error: Table {0} is locked!".format(table))
+    except Update_Violation:
+        print("Error: Cannot update table without initiating transaction.")
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#This function adds tuples into the table.  
+#More specifically it runs over the user input and seperates elements with a '|' by checking the ','
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def INSERT_TABLE(table, arguments):
+    try:  #If the file does not exist raise an error, otherwise open the file and append the new element      
+        if not os.path.exists(table):
+            raise FileNotFoundError
+
+        arguments = arguments[arguments.find('(')+1:arguments.rfind(')')]   #obtain information in parenthesis then remove parethesis 
+    
+        file = open(table, "a")
+        file.write('\n') #Need to write on a new line 
+        for i in arguments:   #Use for loop to run through arguments and replace , with | for the new file. 
+            if(i == ','):
+                file.write(' | ')
+            else:
+                file.write(i)
+        file.close()
+        print('1 new record inserted.')
+   
+    except FileNotFoundError:   #Error message for file not existing 
+        print("!Failed to alter table {0} because it does not exist.".format(table))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function Creates a table 
+# in the current directory with a user input.
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def CREATE_TABLE(new_table, arguments):
+    
+    try:       #Check to see if the table already exists, if it does bring up an error, Otherwise create a new file with table name.
+        if os.path.exists(new_table):
+            raise FileExistsError
+        file = open(new_table, "w+")
+        info = arguments[arguments.find('(')+1:arguments.rfind(')')]   #obtain information in parenthesis then remove parethesis 
+        for i in info:   #Use for loop to run through arguments and replace , with | for the new file. 
+            if(i == ','):
+                file.write(' |')
+            else:
+                file.write(i)
+        print('Table {0} created.'.format(new_table))  #Update User on sucess 
+        file.close()
+    
+    except FileExistsError:  #Error message if the file already exists 
+        print("!Failed to create table {0} because it already exists.".format(new_table))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function appends a user inputted argument/string
+# to the file/table they call.
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def ALTER_TABLE(table, new_element):
+  
+    try:  #If the file does not exist raise an error, otherwise open the file and append the new element      
+        if not os.path.exists(table):
+            raise FileNotFoundError
+        file = open(table, "a+") #open the file for appending
+        file.write(' | ' + new_element) #Adding | to match format of file 
+        file.close()
+        print('Table {0} modified.'.format(table))
+   
+    except FileNotFoundError:   #Error message for file not existing 
+        print("!Failed to alter table {0} because it does not exist.".format(table))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function obtains the determines if a element in a tuple matches speicific requirements 
+# If so, it returns true 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def WHERE_TEST (element_where_index, tuples, EQ): 
+    tuples = tuples.split() #split the tuple up into words 
+    tuple_check = tuples[element_where_index * 2] + ' ' + EQ  #append the desired identifer information with equation
+    tuple_check = tuple_check.split() # remove whitespace
+     
+    if (ListToEquation(tuple_check)): #check equation
+        return True 
+    else:
+        return False
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function prints out tuples with specific elements specified by the user 
+# To see how tuples are inputted please look at the SELECT_TABLE function 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def SPECIFICS(tuples, output_elements, table):
+
+    iterator = 0 #counter used to determine ending element in for loop
+ 
+    for search in output_elements: 
+        search_index = FindIndex(table, search) * 2 #get the index, account for |       
+        print(tuples.split()[search_index], end='')   #use index and print 
+                            
+        if(iterator < len(output_elements) -1 ): #if for loop is not on last element add a | after                     
+            print('|' , end='') 
+        else:
+            print()  #otherwise do nothing an increment the iterator for later 
+
+        iterator = iterator + 1 #increse incrementor 
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function outputs contents user specified table.
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def SELECT_TABLE(command):
+
+    try: 
+        #Declare Variables  
+        index_of_from = command.index('from') #index of from 
+        table = command[index_of_from + 1] #current table pulled from index of list  
+        header = OBTAIN_HEADER(table) #obtain header of table 
+        lines = OBTAIN_TUPLES(table) #obtain tuples of table 
+        wrong_element = '' # blank string 
+       
+        if not os.path.exists(table): #If file does not exist raise an error
+            raise FileNotFoundError
+  
+        if('where' in command): #if user specified 
+           command_where_index = command.index('where') #index of where in user command 
+           element = command[command_where_index+1] # assign element
+           ElementCheck(table, element) #check element than raise element 
+           where_datatype_index = FindIndex(table, command[command_where_index+1]) #obtain datatype location in table tuples
+           right_half_of_EQ = ListToString(command[command_where_index+2:command_where_index+4]) #obtain right half of EQ 
+           
+
+        if (command[1] == '*' and len(command) == 4): #all tuples are outputted
+            file = open(table, "r") #open file 
+            print(file.read()) #output file to user  
+            file.close() #close 
+        
+        elif (command[1] == '*' and 'where' in command): #all elements of tuples outputted with restriction 
+            print(header, end='')
+            for tuples in lines: #go through all the tuples in the table 
+                if (WHERE_TEST (where_datatype_index, tuples, right_half_of_EQ)): #if where is found call where function
+                    print(tuples, end='') #output tuple
+
+        else: #table outputted with some type of restriction 
+           
+            #Declare Variables  
+            outputs = command[1:index_of_from] #get user input between Select and From
+            outputs = ListToString(outputs).replace(',', '') #remove all commas in the desired output lists
+            outputs = outputs.strip() # remove whitespace            
+            outputs = outputs.split() # convert back to string 
+            
+            try:
+                for search in outputs: #check if every element specified by user esists   
+                    if (search not in header): 
+                        wrong_element = search 
+                        raise ElementNotFoundError #if the element does not exist raise a custom exception            
+                
+                #declare variable 
+                iterator = 0    #counter used later in for loops to determine end of | usage while printing 
+                
+                header_list = header.split() #make list a header 
+                for search in outputs: #obtain the index of each search element 
+                    head_search_index = FindIndex(table, search) * 3 #get index, account for | and extra variable                   
+                    print(header_list[head_search_index], end=' ') # print header variable obtained from index
+                    print(header_list[head_search_index + 1], end='') # print the datatype along with desired variable   
+                    
+                    if(iterator < len(outputs) -1 ): #if for loop is not on last element add a | after                                
+                        print(' | ' , end='')
+                    else:
+                        print() #otherwise do nothing an increment the iterator for later 
+                    iterator = iterator + 1 
+
+                for tuples in lines: #go through all the tuples in the table 
+                     if ('where' in command and WHERE_TEST (where_datatype_index, tuples, right_half_of_EQ)): #if where is found call where function
+                        SPECIFICS(tuples, outputs, table) #Call the specifics function 
+                     if ('where' not in command): #if where is not used then do not run extra check  
+                        SPECIFICS(tuples, outputs, table) #Call the specifics function 
+            except ElementNotFoundError:
+                print("!Failed to query because {0} does not exist in table {1}.".format(wrong_element ,table))
+
+    except FileNotFoundError:     #Error message for no file 
+         print("!Failed to query table {0} because it does not exist.".format(table))       
+    except ElementNotFoundError:
+         print("!Failed to query because {0} does not exist in table {1}.".format(element, table))
+    
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This function deletes a table upon user input
+# as long as the file is in the current database/directory.
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def DROP_TABLE(user_file):
+    
+    try:  #try to remove the file, then notify user  
+        os.remove('{0}/{1}'.format(os.getcwd(), user_file))
+        print('Table {0} deleted.'.format(user_file))
+   
+    except FileNotFoundError:   #file not found error detected automatically 
+        print("!Failed to delete {0} because it does not exist.".format(user_file))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Creates directory of user input,
+# directory always in home.
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def CREATE_DATABASE(new_database):
+   
+    try:   #Set current directory to the home directory as databases cannot be in one another (according to professsor).
+        os.chdir(home_directory)
+        os.mkdir(new_database)  #Make hte directory specified by user if it does not already exist 
+        print('Database {0} created.'.format(new_database))
+    
+    except FileExistsError:  #Error message for database already existing is detected automatically
+        print("!Failed to create database {0} because it already exists.".format(new_database))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Deletes an existing directory that user inputs.
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def DROP_DATABASE(user_directory):
+
+    try:  #Use home directory and user input to delete the directory specified by user. This function also deletes all files speciffied by user. 
+        shutil.rmtree('{0}/{1}'.format(home_directory, user_directory))
+        print('Database {0} deleted.'.format(user_directory))
+
+    except FileNotFoundError:  #Error of file not found detected automatically and will notify user 
+        print("!Failed to delete {0} because it does not exist.".format(user_directory))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Switches directory to desired oen,
+# always starts at "home" directory.
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def USE(user_directory):
+
+    try:  #Use homedirectory along with user input to switch the directory then output to user   
+        os.chdir('{0}/{1}'.format(home_directory, user_directory))
+        print("Using database {0}.".format(user_directory))
+   
+    except FileNotFoundError:  #Error of file not found detected automatically and will notify user 
+        print("!Failed because database {0} does not exist.".format(user_directory))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Function to convert parameters in list to a single string
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def ListToString(list_element): 
+  
+    parameter_string = " " #Declare an empty string
+    return (parameter_string.join(list_element))  #Return result   
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Function checks to see if single quotes used and if so keeps string in quotes case sensitive 
+# Everything else is lowercased
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def lower_and_consider_quotes (sentence):
+     quote_count = 0 # set the quote count to 0 
+     new_sentence = '' # make empty string 
+     sentence_list = sentence.split() #make a list of current sentence 
+     
+     #important for JOIN commands 
+     singular_words = [] #make an empty list to store single letters and . words
+     index_list = [] # make an empoty list to store index of the aforementioned words 
+     for words in sentence_list:       
+        if((len(words) == 2 and ',' in words) or (len(words) == 1 and words.isalpha()) ): #selective variables are just single letters  
+            singular_words.append(words) #store selective and where variables in list 
+            index_list.append(sentence_list.index(words)) #store index of this word
+        if ('.' in words): 
+            left = words.split('.')[0]
+            right = words.split('.')[1].lower()
+            combo = left + '.' + right
+            singular_words.append(combo) #store selective and where variables in list 
+            index_list.append(sentence_list.index(words)) #store index of this word
+
+     #important for ALL commands 
+     for letters in sentence: #run loop through all characters 
+        if(letters == "'"): #if quote detected increase the count 
+           quote_count = quote_count + 1
+        if(quote_count % 2 == 0): #anything outside the quotes are lowercased 
+            new_sentence = new_sentence + letters.lower()
+        else: #everything inside quotes are added without modification 
+            new_sentence = new_sentence + letters
+            
+        new_sentence = new_sentence.replace("'", '')  #remove all the single quotes
+     if (quote_count % 2 != 0):
+        raise WrongSingleQuotes
+    
+     new_sentence_list = new_sentence.split()
+     
+     #important for JOIN commands
+     i = 0
+     for index in index_list:
+        new_sentence_list[index] = singular_words[i]
+        i = i + 1
+
+     new_sentence = ListToString(new_sentence_list)
+ 
+
+     return new_sentence #return the new string
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Similar to the ELementCheckFunction but:
+# 1. Is more strict (i.e., 'in' keyword replaced with '==')
+# 2. Uses the Lock Header  
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    
+def ElementCheckExactLock (table, header, element):
+    
+    header = header.split()
+    for words in header:
+      
+        if (words == element):
+            return True
+
+    #if nothing caught in loop return false  
+    return False
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Similar to the ELementCheckFunction but is more strict (i.e., 'in' keyword replaced with '==') 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    
+def ElementCheckExact (table, element):
+    header = OBTAIN_HEADER(table) #obtain header of table 
+    header = header.split()
+    for words in header:
+        if (words == element):
+            return True
+
+    #if nothing caught in loop return false  
+    return False
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Check to see if element requested by user even exists in the table 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    
+def ElementCheck (table, element):
+    header = OBTAIN_HEADER(table) #obtain header of table 
+    if(element not in header): #see if element in table 
+        wrong_element = element #if not, raise error 
+        raise ElementNotFoundError 
+           
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~   
+# This function ensures that the equation is in the proper format 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def StringEquationToList(Equation_String): 
+   #Declare variables     
+    LEQ = '' #new list equation
+    prev_letter = ''  #storing the previous letter if necessary 
+     
+    for letter in Equation_String:    
+           
+        if((letter == '=' and prev_letter == '') or letter == '>' or letter == '<'):  #check to see if char is equation 
+            LEQ = LEQ + ' ' + letter + ' ' #if so, add space 
+        elif(letter == '!'):  #if char is ! then it is likely the != symbol 
+            prev_letter = letter #store the previous char (!)
+            LEQ = LEQ + ' ' + letter  #add space to the front only  
+        elif(prev_letter == '!' and letter == '='): #if != detected then add space after = sign 
+            LEQ = LEQ + letter + ' '
+        else: 
+            LEQ = LEQ + letter #otherwise append string as usual 
+
+    LEQ = LEQ.strip() #remove uncessary whitespace to result 
+    LEQ = LEQ.split() #turn to list 
+        
+    if (len(LEQ) > 3): 
+        raise IncorrectFormat
+
+    return LEQ #return list of the string 
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# If equations by user are in proper format (i.e., left = right)
+# but not spaced properly (e.g., left= right or left=right or left =right)
+# then this function usese the StringEquationToList function to fix it and updates user_input
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def FixEQFormat(user_input):
+    #Checking if equation is in proper fomat (i.e., spaces between each, if not add spaces) 
+    if ('where' in user_input): 
+        where_input_index = user_input.index('where') #index of where in user command 
+        #where_datatype_index = FindIndex(table, command[where_input_index+1]) #obtain datatype location in table tuple         
+        if (len(user_input) != where_input_index + 4): #check if the format is right for equation
+            if(len(user_input) == where_input_index + 2): #index case if equation has no space 
+                 Fixed_EQ = StringEquationToList(ListToString(user_input[where_input_index+1 : where_input_index + 2])) #fix format 
+                 old_EQ = ListToString(user_input[where_input_index+1 : where_input_index + 2])  #obtain old equation (always on last)
+                 user_input.remove(old_EQ) #remove old equation (always on last)
+                 user_input = user_input + Fixed_EQ #append fixed EQ
+            elif(len(user_input) == where_input_index + 3): #index case if equation has only one space 
+                 Fixed_EQ = StringEquationToList(ListToString(user_input[where_input_index+1 : where_input_index + 3])) #fix format 
+                 old_EQ_Left = user_input[where_input_index+1] #obtain old equation llft side (always one away from last)
+                 old_EQ_Right = user_input[where_input_index+2] #obtain old equation llft side (always last)
+                 user_input.remove(old_EQ_Left)  #remove left EQ
+                 user_input.remove(old_EQ_Right) #remove right EQ
+                 user_input = user_input + Fixed_EQ  #add fixed EQ
+            else:
+                 raise IncorrectFormat
+    if ('set' in user_input):
+        set_input_index = user_input.index('set') #index of where in user command
+        if(len(user_input) !=  set_input_index + 8): #if the index is off then equation for set is off 
+            if(len(user_input) == set_input_index + 6):  #index case if equation has no space 
+                 Fixed_EQ = StringEquationToList(ListToString(user_input[set_input_index+1 : set_input_index + 2])) #fix format 
+                 start_of_command = user_input[0 : set_input_index+1] #get everything before the left side of EQ 
+                 rest_of_command = user_input[set_input_index+2 : ]  #get everything after the right side of EQ
+                 user_input = start_of_command + Fixed_EQ + rest_of_command #combine with new equation in middle 
+            elif(len(user_input) == set_input_index + 7): #index case if equation has only one space 
+                 Fixed_EQ = StringEquationToList(ListToString(user_input[set_input_index+1 : set_input_index + 3])) #fix format 
+                 start_of_command = user_input[0 : set_input_index+1] #get everything before the left side of EQ 
+                 rest_of_command = user_input[set_input_index+3: ]  #get everything after the right side of EQ
+                 user_input = start_of_command + Fixed_EQ + rest_of_command #combine with new equation in middle 
+            else:
+                 raise IncorrectFormat
+    return user_input
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Main function handles parsing user input  
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def Main():
+  
+    while (True):  #Run endless loop until user desires to exit
+        user_input = '' #User input is empty string 
+        user_input =  user_input.strip() #make user_input an empty list 
+        user_input = user_input.split() #remove any whitespace in this list 
+        
+        try:
+            #repeat obtaning input until user enters a ;
+            while (not ListToString(user_input).endswith(';')): 
+                new_input = input('') #get input from user 
+                if ('--' in new_input or len(new_input) == 0):
+                    new_input = '' #reset if comments detected 
+                else:
+                    new_input = lower_and_consider_quotes(new_input) #removes single quotes and lowers non quoted material
+                    new_input.strip() #remove whitespace 
+                    
+                    user_input = user_input + new_input.split() #add string to list
+                    if(len(user_input) == 1 and user_input[0] == '.exit'): #if user inputs .exit then end program
+                        print('All done.') 
+                        exit()
+        
+            user_input = ListToString(user_input).replace(';',' ') #Store all of input in a list after removing ';'
+            user_input = user_input.split() #remove whitespace
+            
+            user_input = FixEQFormat(user_input) #fix format of user equations if needed 
+          
+            #Series of if statements act as parser 
+            if (ListToString(user_input) == '.exit'):  
+                print('All done.') 
+                exit()
+            elif (len(user_input) == 2 and user_input[0] == 'begin' and user_input[1] == 'transaction'):
+                Transaction_Start()
+            elif (len(user_input) == 1 and user_input[0] == 'commit'):
+                Commit()      
+            elif (len(user_input) == 2 and user_input[0] == 'use'):     #triggers use database function
+                USE(user_input[1])
+            elif (len(user_input) == 3 and user_input[0] == 'create' and user_input[1] == 'database'): #triggers create database function 
+                CREATE_DATABASE(user_input[2])
+            elif (len(user_input) == 3 and user_input[0] == 'drop' and user_input[1] == 'database'): #triggers drop database function  
+                DROP_DATABASE(user_input[2])
+            elif (len(user_input) == 3 and user_input[0] == 'drop' and user_input[1] == 'table'): #triggers drop table function
+                DROP_TABLE(user_input[2])
+            elif (len(user_input) > 3 and user_input[0] == 'alter' and user_input[1] == 'table' and user_input[3] == 'add'):  #triggers alter table  function
+                ALTER_TABLE(user_input[2], ListToString(user_input[4:]))
+            elif (len(user_input) > 3 and user_input[0] == 'create' and user_input[1] == 'table'): #triggers create table function
+                #account for no space statements                 
+                if('(' in user_input[2]):
+
+                    #obtain the table and variable name seperatly 
+                    table_name = user_input[2].split('(')[0]
+                    variable = user_input[2].split('(')[1]                  
+                     
+                    #obtain the user command without the error                     
+                    command_start = ListToString(user_input[0 : 2])
+                    command_end = ListToString(user_input[3 :])
+                    #combine them to make proper user_input                    
+                    command =  command_start + ' ' + table_name + ' ' +  '(' + variable +  ' ' + command_end
+                    user_input = command.split()
+                    
+                CREATE_TABLE(user_input[2], ListToString(user_input[3:]))
+            elif (user_input[0] == 'select' and 'from' in user_input): #triggers select table function
+                #check if user is joining any tables 
+                if( ('.' in ListToString(user_input))  and ( 10 < len(user_input)  and len(user_input) < 15) ):             
+                    JOIN_parser(user_input) 
+                #otherwise proceed as normal 
+                else:
+                    SELECT_TABLE(user_input)  
+            elif (len(user_input) > 3 and user_input[0] == 'insert' and user_input[1] == 'into' and ( user_input[3].startswith("values(") or user_input[3].startswith("values") ) ): #triggers insert table function
+                INSERT_TABLE(user_input[2], ListToString(user_input[3:]))
+            elif (len(user_input) == 10 and user_input[0] == 'update' and user_input[2] == 'set' and user_input[6] == 'where'): 
+                UPDATE_TABLE(user_input[1], user_input[3:6], user_input[7:])
+            elif (len(user_input) == 7 and user_input[0] == 'delete' and user_input[1] == 'from' and user_input[3] == 'where'): 
+                DELETE_TUPLE(user_input[2], user_input[4:])
+            elif (len(user_input) == 0 ): #If file has empty lines they are removed when being read in 
+                print (" ")
+            else:
+                print ("!Failed, please review documentation concerning acceptable commands")
+
+        except WrongSingleQuotes:  
+            print("!Failed because of unbalanced quotations")
+        except IncorrectFormat:
+            print("!Failed to query because equation (or element near equation) is in wrong format.") 
+        except ElementNotFoundError:
+            print("!Failed to query because {0} does not exist in table {1}.".format(wrong_element ,table))
+        except Tables_Not_Used:
+            print("!Failed, selective varaibles do not match table alias")
+        except Commit_Issue:
+            print("Error: No transaction has been started.")
+        except No_File_Transaction: 
+            print("Error: No File was used in transaction, please use a file before commiting.")
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# This guarentees that the main funciton is called first
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+if __name__ == "__main__": 
+    Personal_ID = random.random()
+    Main()
+
+    
